@@ -151,7 +151,7 @@ function App() {
   return (
     <Routes>
       <Route
-        path="/cornhole"
+        path="/"
         element={<Home navigate={navigate} />}
       />
       <Route

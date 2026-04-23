@@ -362,7 +362,7 @@ export default function Tournament() {
 
   // Play match
   const playMatch = (m) => {
-    navigate('/cornhole', {
+    navigate('/', {
       state: {
         matchId: m.id,
         tournamentId: selectedTournament?.id,
