@@ -718,6 +718,10 @@ export default function Tournament() {
                 ))}
               </ul>
 
+              <div className="text-muted small mb-3">
+                {players.length} player{players.length !== 1 ? 's' : ''} added
+              </div>
+
               <div className="mb-3">
                 <button className="btn btn-info" onClick={generateTeams}>
                   Generate Teams
@@ -745,6 +749,10 @@ export default function Tournament() {
                   </li>
                 ))}
               </ul>
+
+              <div className="text-muted small mb-3">
+                {teams.length} team{teams.length !== 1 ? 's' : ''} added
+              </div>
             </>
           )}
 
