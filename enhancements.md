@@ -1,0 +1,1 @@
+1. No buttons in the Matches section until there are at least 2 teams. When there are 2 or more teams, only the Generate Bracket button should show. Once the Generate Bracket button is pressed, only the Regenerate Bracket button and the Start Tournament button should show. Once the Start Tournament is pressed, only the Fetch Scores and Hide Bracket buttons should show.
