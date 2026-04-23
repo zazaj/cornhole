@@ -23,6 +23,9 @@ export default function Tournament() {
 
   const hasBracket = selectedTournament && matches.length > 0;
 
+  // Check if tournament has a champion (only one match left with a winner)
+  const hasChampion = matches.length === 1 && matches[0]?.winner_id;
+
   // Fetch tournaments
   const fetchTournaments = async () => {
     const { data } = await supabase.from('tournaments').select('*');
@@ -673,6 +676,7 @@ export default function Tournament() {
             <button
               className="btn btn-danger ms-auto"
               onClick={deleteTournament}
+              disabled={tournamentStarted && !hasChampion}
             >
               Delete Tournament
             </button>
