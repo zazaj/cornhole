@@ -61,6 +61,7 @@ export default function Tournament() {
   const selectTournament = async (t) => {
     setSelectedTournament(t);
     setMode(t.mode || 'teams');
+    setTournamentStarted(t.started || false);
     const { data: teamsData } = await supabase
       .from('teams')
       .select('*')
@@ -78,7 +79,6 @@ export default function Tournament() {
     await fetchMatches(t.id);
 
     setShowBracket(true);
-    setTournamentStarted(false);
 
     // Clear new player input
     setNewPlayer('');
@@ -384,13 +384,30 @@ export default function Tournament() {
       .delete()
       .eq('tournament_id', selectedTournament.id);
 
+    // Reset started status in database
+    await supabase
+      .from('tournaments')
+      .update({ started: false })
+      .eq('id', selectedTournament.id);
+
     setMatches([]);
     setTournamentStarted(false);
+    setSelectedTournament({ ...selectedTournament, started: false });
   };
 
   // Start tournament
-  const startTournament = () => {
-    setTournamentStarted(true);
+  const startTournament = async () => {
+    if (!selectedTournament) return;
+
+    const { error } = await supabase
+      .from('tournaments')
+      .update({ started: true })
+      .eq('id', selectedTournament.id);
+
+    if (!error) {
+      setTournamentStarted(true);
+      setSelectedTournament({ ...selectedTournament, started: true });
+    }
   };
 
   // Set winner
@@ -752,6 +769,8 @@ export default function Tournament() {
             >
               Start Tournament
             </button>
+          </div>
+          <div className="d-flex gap-2 mb-3">
 
             {/* Fetch Scores */}
             <button

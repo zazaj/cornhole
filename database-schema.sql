@@ -4,6 +4,7 @@ CREATE TABLE tournaments (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   mode TEXT NOT NULL DEFAULT 'teams',
+  started BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
