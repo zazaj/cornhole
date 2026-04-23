@@ -753,6 +753,15 @@ export default function Tournament() {
               Start Tournament
             </button>
 
+            {/* Fetch Scores */}
+            <button
+              className="btn btn-info"
+              onClick={() => fetchMatches(selectedTournament.id)}
+              disabled={!hasBracket}
+            >
+              Fetch Scores
+            </button>
+
             {/* Toggle view */}
             <button
               className="btn btn-primary"
