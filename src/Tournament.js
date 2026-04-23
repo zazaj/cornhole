@@ -698,7 +698,7 @@ export default function Tournament() {
                   }}
                   placeholder="Player name"
                 />
-                <button className="btn btn-success" onClick={addPlayer}>
+                <button className="btn btn-success" onClick={addPlayer} disabled={tournamentStarted}>
                   Add Player
                 </button>
               </div>
@@ -733,7 +733,7 @@ export default function Tournament() {
                   onChange={(e) => setNewTeam(e.target.value)}
                   placeholder="Team name"
                 />
-                <button className="btn btn-success" onClick={addTeam}>
+                <button className="btn btn-success" onClick={addTeam} disabled={tournamentStarted}>
                   Add Team
                 </button>
               </div>
