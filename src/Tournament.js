@@ -23,8 +23,12 @@ export default function Tournament() {
 
   const hasBracket = selectedTournament && matches.length > 0;
 
-  // Check if tournament has a champion (only one match left with a winner)
-  const hasChampion = matches.length === 1 && matches[0]?.winner_id;
+  // Check if tournament has a champion (highest round match has a winner)
+  const hasChampion = matches.length > 0 && (() => {
+    const maxRound = Math.max(...matches.map(m => m.round || 1));
+    const finalMatches = matches.filter(m => m.round === maxRound);
+    return finalMatches.length === 1 && finalMatches[0].winner_id;
+  })();
 
   // Fetch tournaments
   const fetchTournaments = async () => {
@@ -746,55 +750,59 @@ export default function Tournament() {
 
           <h3 className="mt-4">Matches</h3>
 
-          <div className="d-flex gap-2 mb-3">
-            {/* Generate (only if no bracket exists) */}
-            <button
-              className="btn btn-warning"
-              onClick={generateBracket}
-              disabled={hasBracket || teams.length < 2}
-            >
-              Generate Bracket
-            </button>
+          {/* Button logic based on tournament state */}
+          {teams.length >= 2 && (
+            <div className="d-flex gap-2 mb-3">
+              {/* Phase 1: Only Generate Bracket when no bracket exists */}
+              {!hasBracket && (
+                <button
+                  className="btn btn-warning"
+                  onClick={generateBracket}
+                  disabled={teams.length < 2}
+                >
+                  Generate Bracket
+                </button>
+              )}
 
-            {/* Regenerate (only if bracket exists) */}
-            <button
-              className="btn btn-danger"
-              onClick={regenerateBracket}
-              disabled={!hasBracket || tournamentStarted}
-            >
-              Regenerate Bracket
-            </button>
+              {/* Phase 2: Regenerate and Start Tournament when bracket exists but not started */}
+              {hasBracket && !tournamentStarted && (
+                <>
+                  <button
+                    className="btn btn-danger"
+                    onClick={regenerateBracket}
+                  >
+                    Regenerate Bracket
+                  </button>
 
-            {/* Start Tournament (only if bracket exists) */}
-            <button
-              className="btn btn-success"
-              onClick={startTournament}
-              disabled={!hasBracket || tournamentStarted}
-            >
-              Start Tournament
-            </button>
-          </div>
-          <div className="d-flex gap-2 mb-3">
+                  <button
+                    className="btn btn-success"
+                    onClick={startTournament}
+                  >
+                    Start Tournament
+                  </button>
+                </>
+              )}
 
-            {/* Fetch Scores */}
-            <button
-              className="btn btn-info"
-              onClick={() => fetchMatches(selectedTournament.id)}
-              disabled={!hasBracket}
-            >
-              Fetch Scores
-            </button>
+              {/* Phase 3: Fetch Scores and Hide Bracket when tournament started */}
+              {tournamentStarted && (
+                <>
+                  <button
+                    className="btn btn-info"
+                    onClick={() => fetchMatches(selectedTournament.id)}
+                  >
+                    Fetch Scores
+                  </button>
 
-            {/* Toggle view */}
-            <button
-              className="btn btn-primary"
-              onClick={() => setShowBracket(!showBracket)}
-              disabled={!hasBracket}
-            >
-              {showBracket ? "Hide Bracket" : "View Bracket"}
-            </button>
-
-          </div>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => setShowBracket(!showBracket)}
+                  >
+                    {showBracket ? "Hide Bracket" : "View Bracket"}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
 
           {showBracket && (
             <ul className="list-group">
