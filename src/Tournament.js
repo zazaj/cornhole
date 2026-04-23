@@ -19,6 +19,7 @@ export default function Tournament() {
   const [byeCandidates, setByeCandidates] = useState([]);
   const [showByeModal, setShowByeModal] = useState(false);
   const [pendingRoundData, setPendingRoundData] = useState(null);
+  const [tournamentStarted, setTournamentStarted] = useState(false);
 
   const hasBracket = selectedTournament && matches.length > 0;
 
@@ -77,6 +78,7 @@ export default function Tournament() {
     await fetchMatches(t.id);
 
     setShowBracket(true);
+    setTournamentStarted(false);
 
     // Clear new player input
     setNewPlayer('');
@@ -383,6 +385,12 @@ export default function Tournament() {
       .eq('tournament_id', selectedTournament.id);
 
     setMatches([]);
+    setTournamentStarted(false);
+  };
+
+  // Start tournament
+  const startTournament = () => {
+    setTournamentStarted(true);
   };
 
   // Set winner
@@ -731,9 +739,18 @@ export default function Tournament() {
             <button
               className="btn btn-danger"
               onClick={regenerateBracket}
-              disabled={!hasBracket}
+              disabled={!hasBracket || tournamentStarted}
             >
               Regenerate Bracket
+            </button>
+
+            {/* Start Tournament (only if bracket exists) */}
+            <button
+              className="btn btn-success"
+              onClick={startTournament}
+              disabled={!hasBracket || tournamentStarted}
+            >
+              Start Tournament
             </button>
 
             {/* Toggle view */}
