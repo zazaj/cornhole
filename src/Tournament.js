@@ -662,7 +662,7 @@ export default function Tournament() {
       {/* Teams / Players Section */}
       {selectedTournament && (
         <>
-          <h3>{selectedTournament.name} - {mode === 'players' ? 'Players' : 'Teams'} Mode</h3>
+          <h3>{selectedTournament.name}</h3>
 
           <div className="mb-3 d-flex gap-2 align-items-center">
             <button
