@@ -12,6 +12,7 @@ CREATE TABLE teams (
   id SERIAL PRIMARY KEY,
   tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  generated_from_players BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
