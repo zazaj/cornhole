@@ -20,6 +20,16 @@ function Home({ navigate, ...props }) {
   const matchId = match?.matchId;
   const isTournamentMatch = Boolean(matchId);
   const matchHasWinner = Boolean(winnerId);
+  const matchRound = match?.round;
+  const latestRound = match?.latestRound;
+  const isPreviousRound = isTournamentMatch && matchRound !== undefined && latestRound !== undefined && matchRound < latestRound;
+  const disableResetScores = isPreviousRound;
+  const disableScoring = matchHasWinner || isPreviousRound;
+
+  // Determine winner name for display
+  const winnerName = matchHasWinner
+    ? (winnerId === match?.team1?.id || (!match?.team1?.id && winnerId === '1') ? team1Name : team2Name)
+    : null;
 
   const saveMatchScore = async (team1_score, team2_score, winner_id = null) => {
     if (!matchId) return;
@@ -34,20 +44,23 @@ function Home({ navigate, ...props }) {
   };
 
   const declareWinnerIfNeeded = async (team, nextScore, otherScore) => {
-    if (!isTournamentMatch || matchHasWinner) return null;
+    if (matchHasWinner) return null;
     if (nextScore < 21) return null;
 
-    const winnerTeam = team === 1 ? match.team1 : match.team2;
+    const winnerTeam = team === 1 ? match?.team1 : match?.team2;
     const winner_id = winnerTeam?.id || null;
-    if (!winner_id) return null;
 
-    await saveMatchScore(
-      team === 1 ? nextScore : otherScore,
-      team === 2 ? nextScore : otherScore,
-      winner_id
-    );
-    setWinnerId(winner_id);
-    return winner_id;
+    if (isTournamentMatch) {
+      if (!winner_id) return null;
+      await saveMatchScore(
+        team === 1 ? nextScore : otherScore,
+        team === 2 ? nextScore : otherScore,
+        winner_id
+      );
+    }
+
+    setWinnerId(winner_id || `${team}`);
+    return winner_id || `${team}`;
   };
 
   const handleScoreChange = async (team, delta) => {
@@ -56,16 +69,16 @@ function Home({ navigate, ...props }) {
     if (team === 1) {
       const nextScore = Math.max(0, team1Score + delta);
       setTeam1Score(nextScore);
-      if (isTournamentMatch) {
-        const newWinnerId = await declareWinnerIfNeeded(1, nextScore, team2Score);
-        if (!newWinnerId) await saveMatchScore(nextScore, team2Score);
+      const newWinnerId = await declareWinnerIfNeeded(1, nextScore, team2Score);
+      if (isTournamentMatch && !newWinnerId) {
+        await saveMatchScore(nextScore, team2Score);
       }
     } else {
       const nextScore = Math.max(0, team2Score + delta);
       setTeam2Score(nextScore);
-      if (isTournamentMatch) {
-        const newWinnerId = await declareWinnerIfNeeded(2, nextScore, team1Score);
-        if (!newWinnerId) await saveMatchScore(team1Score, nextScore);
+      const newWinnerId = await declareWinnerIfNeeded(2, nextScore, team1Score);
+      if (isTournamentMatch && !newWinnerId) {
+        await saveMatchScore(team1Score, nextScore);
       }
     }
   };
@@ -78,6 +91,7 @@ function Home({ navigate, ...props }) {
   const resetScores = () => {
     setTeam1Score(0);
     setTeam2Score(0);
+    setWinnerId(null);
   };
 
   useEffect(() => {
@@ -116,7 +130,7 @@ function Home({ navigate, ...props }) {
               onNameChange={(newName) => handleNameChange(1, newName)}
               color={team1Color}
               onColorChange={setTeam1Color}
-              disableScoring={matchHasWinner}
+              disableScoring={disableScoring}
             />
           </div>
           <div className="col-12 col-md-6">
@@ -127,17 +141,29 @@ function Home({ navigate, ...props }) {
               onNameChange={(newName) => handleNameChange(2, newName)}
               color={team2Color}
               onColorChange={setTeam2Color}
-              disableScoring={matchHasWinner}
+              disableScoring={disableScoring}
             />
           </div>
         </div>
       </main>
 
+      {/* WINNER BANNER */}
+      {matchHasWinner && (
+        <div className="winner-banner text-center py-2" style={{ backgroundColor: '#28a745', color: 'white', fontWeight: 'bold', fontSize: '1.2rem' }}>
+          🏆 {winnerName} Wins! 🏆
+        </div>
+      )}
+
       {/* FOOTER */}
       <footer className="App-footer content-fluid d-flex align-items-center justify-content-center p-0">
         <div className="col-6 col-md-3">
-          <button type="button" onClick={resetScores} className="btn btn-danger btn-lg px-1 w-100">
-            Reset Scores
+          <button
+            type="button"
+            onClick={resetScores}
+            className="btn btn-danger btn-lg px-1 w-100"
+            disabled={disableResetScores}
+          >
+            {isPreviousRound ? "Previous Round" : "Reset Scores"}
           </button>
         </div>
           </footer>

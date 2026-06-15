@@ -16,10 +16,12 @@ export default function Tournament() {
   const [showOddPlayerModal, setShowOddPlayerModal] = useState(false);
   const [matches, setMatches] = useState([]);
   const [showBracket, setShowBracket] = useState(false);
+  const [showTeamList, setShowTeamList] = useState(true);
   const [byeCandidates, setByeCandidates] = useState([]);
   const [showByeModal, setShowByeModal] = useState(false);
   const [pendingRoundData, setPendingRoundData] = useState(null);
   const [tournamentStarted, setTournamentStarted] = useState(false);
+  const [hideCompleted, setHideCompleted] = useState(false);
 
   const hasBracket = selectedTournament && matches.length > 0;
 
@@ -205,11 +207,28 @@ export default function Tournament() {
       return;
     }
 
-    // Delete existing teams
+    // Delete existing bracket since teams have changed, invalidating any current bracket
+    await supabase
+      .from('matches')
+      .delete()
+      .eq('tournament_id', selectedTournament.id);
+
+    await supabase
+      .from('tournaments')
+      .update({ started: false })
+      .eq('id', selectedTournament.id);
+
+    // Reset local state immediately so Start Tournament is disabled
+    setMatches([]);
+    setTournamentStarted(false);
+    setSelectedTournament({ ...selectedTournament, started: false });
+
+    // Delete only auto-generated teams from players
     const { error: deleteError } = await supabase
       .from('teams')
       .delete()
-      .eq('tournament_id', selectedTournament.id);
+      .eq('tournament_id', selectedTournament.id)
+      .eq('generated_from_players', true);
 
     if (deleteError) {
       console.error('Delete teams error:', deleteError);
@@ -220,11 +239,12 @@ export default function Tournament() {
     // Generate new teams
     const newTeams = generateTeamsFromPlayersSync(players);
 
-    // Insert new teams
+    // Insert new teams marked as auto-generated
     for (const team of newTeams) {
       const { error: insertError } = await supabase.from('teams').insert({
         name: team.name,
-        tournament_id: selectedTournament.id
+        tournament_id: selectedTournament.id,
+        generated_from_players: true
       });
 
       if (insertError) {
@@ -238,18 +258,33 @@ export default function Tournament() {
     await selectTournament(selectedTournament);
   };
 
-  // Generate teams from players
-  const generateTeamsFromPlayers = async () => {
-    setPlayerError('');
+
+  // Helper: Generate teams from players only (no bracket generation)
+  const generateTeamsFromPlayersOnly = async () => {
+    if (!players || players.length === 0) return true; // No players, proceed
 
     if (players.length < 4) {
       setPlayerError('Players mode requires at least 4 players.');
-      return;
+      return false;
     }
 
     if (players.length % 2 !== 0) {
       setPlayerError('Player count must be even to generate teams.');
-      return;
+      return false;
+    }
+
+    // Delete only auto-generated teams from previous runs
+    // Use .is() to explicitly check for true value, not null or false
+    const { error: deleteError } = await supabase
+      .from('teams')
+      .delete()
+      .eq('tournament_id', selectedTournament.id)
+      .is('generated_from_players', true);
+
+    if (deleteError) {
+      console.error('Delete auto-generated teams error:', deleteError);
+      alert('Failed to delete auto-generated teams.');
+      return false;
     }
 
     const shuffled = [...players].sort(() => Math.random() - 0.5);
@@ -258,12 +293,20 @@ export default function Tournament() {
     for (let i = 0; i < shuffled.length; i += 2) {
       newTeams.push({
         name: `${shuffled[i]} & ${shuffled[i + 1]}`,
-        tournament_id: selectedTournament.id
+        tournament_id: selectedTournament.id,
+        generated_from_players: true
       });
     }
 
-    await supabase.from('teams').insert(newTeams);
+    const { error: insertError } = await supabase.from('teams').insert(newTeams);
 
+    if (insertError) {
+      console.error('Insert teams error:', insertError);
+      alert('Failed to generate teams.');
+      return false;
+    }
+
+    // Fetch updated teams
     const { data: updatedTeams } = await supabase
       .from('teams')
       .select('*')
@@ -272,49 +315,44 @@ export default function Tournament() {
     const teamsData = updatedTeams || [];
     setTeams(teamsData);
 
-    const teamIds = teamsData.map(t => t.id);
-    if (teamIds.length < 2) return;
-
-    if (teamIds.length % 2 !== 0) {
-      setByeCandidates(teamIds);
-      setPendingRoundData({
-        tournamentId: selectedTournament.id,
-        round: 1,
-        initial: true,
-        teamIds
-      });
-      setShowByeModal(true);
-      return;
-    }
-
-    const matches = [];
-    for (let i = 0; i < teamIds.length; i += 2) {
-      matches.push({
-        tournament_id: selectedTournament.id,
-        team1_id: teamIds[i],
-        team2_id: teamIds[i + 1],
-        round: 1
-      });
-    }
-
-    await supabase.from('matches').insert(matches);
-    await fetchMatches(selectedTournament.id);
+    return true;
   };
 
   // Generate bracket
   const generateBracket = async () => {
     if (!selectedTournament) return;
 
-    if (mode === 'players') {
-      await generateTeamsFromPlayers();
-      return;
+    // Check if players exist and if teams have already been generated from them
+    if (players.length > 0) {
+      // Check if auto-generated teams already exist
+      const { data: existingAutoTeams } = await supabase
+        .from('teams')
+        .select('*')
+        .eq('tournament_id', selectedTournament.id)
+        .eq('generated_from_players', true);
+
+      const hasAutoGeneratedTeams = existingAutoTeams && existingAutoTeams.length > 0;
+
+      // Only generate teams if they haven't been generated yet
+      if (!hasAutoGeneratedTeams) {
+        const success = await generateTeamsFromPlayersOnly();
+        if (!success) return;
+      }
     }
 
-    // Teams mode
-    const shuffled = [...teams].sort(() => Math.random() - 0.5);
-    const teamIds = shuffled.map(t => t.id);
+    // Fetch fresh teams list
+    const { data: freshTeams } = await supabase
+      .from('teams')
+      .select('*')
+      .eq('tournament_id', selectedTournament.id);
 
-    if (teamIds.length < 2) return;
+    const teamList = freshTeams || [];
+    const teamIds = teamList.map(t => t.id);
+
+    if (teamIds.length < 2) {
+      alert('At least 2 teams are required to generate a bracket.');
+      return;
+    }
 
     if (teamIds.length % 2 !== 0) {
       setByeCandidates(teamIds);
@@ -328,13 +366,16 @@ export default function Tournament() {
       return;
     }
 
+    // Shuffle teams so they're randomly paired (not grouped by type)
+    const shuffled = [...teamIds].sort(() => Math.random() - 0.5);
+
     const matches = [];
 
-    for (let i = 0; i < teamIds.length; i += 2) {
+    for (let i = 0; i < shuffled.length; i += 2) {
       matches.push({
         tournament_id: selectedTournament.id,
-        team1_id: teamIds[i],
-        team2_id: teamIds[i + 1],
+        team1_id: shuffled[i],
+        team2_id: shuffled[i + 1],
         round: 1
       });
     }
@@ -369,6 +410,7 @@ export default function Tournament() {
 
   // Play match
   const playMatch = (m) => {
+    const latestRound = matches.length > 0 ? Math.max(...matches.map(m => m.round || 1)) : 1;
     navigate('/', {
       state: {
         matchId: m.id,
@@ -377,7 +419,9 @@ export default function Tournament() {
         team2: m.team2,
         team1_score: m.team1_score ?? 0,
         team2_score: m.team2_score ?? 0,
-        winner_id: m.winner_id ?? null
+        winner_id: m.winner_id ?? null,
+        round: m.round,
+        latestRound: latestRound
       }
     });
   };
@@ -415,26 +459,6 @@ export default function Tournament() {
       setTournamentStarted(true);
       setSelectedTournament({ ...selectedTournament, started: true });
     }
-  };
-
-  // Set winner
-  const setWinner = async (match, winnerId) => {
-    if (!selectedTournament) return;
-
-    const tournamentId = selectedTournament.id || match.tournament_id;
-    if (!tournamentId) return;
-
-    // 1. Save winner
-    await supabase
-      .from('matches')
-      .update({ winner_id: winnerId })
-      .eq('id', match.id);
-
-    // 2. Refresh matches
-    await fetchMatches(tournamentId);
-
-    // 3. Try to advance bracket
-    await advanceRound(tournamentId);
   };
 
   // Advance round if all matches in current round are finished
@@ -666,6 +690,12 @@ export default function Tournament() {
 
           <div className="mb-3 d-flex gap-2 align-items-center">
             <button
+              className={`btn ${showTeamList ? 'btn-secondary' : 'btn-outline-secondary'}`}
+              onClick={() => setShowTeamList(!showTeamList)}
+            >
+              {showTeamList ? "Hide Teams/Players" : "Show Teams/Players"}
+            </button>
+            <button
               className={`btn ${mode === 'teams' ? 'btn-primary' : 'btn-outline-primary'}`}
               onClick={() => setMode('teams')}
             >
@@ -686,7 +716,7 @@ export default function Tournament() {
             </button>
           </div>
 
-          {mode === 'players' ? (
+          {showTeamList && (mode === 'players' ? (
             <>
               <div className="mb-3 d-flex gap-2">
                 <input
@@ -754,7 +784,7 @@ export default function Tournament() {
                 {teams.length} team{teams.length !== 1 ? 's' : ''} added
               </div>
             </>
-          )}
+          ))}
 
           <h3 className="mt-4">Matches</h3>
 
@@ -791,90 +821,75 @@ export default function Tournament() {
                 </>
               )}
 
-              {/* Phase 3: Fetch Scores and Hide Bracket when tournament started */}
+              {/* Phase 3: Fetch Scores when tournament started */}
               {tournamentStarted && (
-                <>
-                  <button
-                    className="btn btn-info"
-                    onClick={() => fetchMatches(selectedTournament.id)}
-                  >
-                    Fetch Scores
-                  </button>
-
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => setShowBracket(!showBracket)}
-                  >
-                    {showBracket ? "Hide Bracket" : "View Bracket"}
-                  </button>
-                </>
+                <button
+                  className="btn btn-info"
+                  onClick={() => fetchMatches(selectedTournament.id)}
+                >
+                  Get Scores
+                </button>
               )}
             </div>
           )}
 
           {showBracket && (
-            <ul className="list-group">
-              {matches.map((m) => (
-                <li
-                  key={m.id}
-                  className="list-group-item d-flex justify-content-between align-items-center"
-                style={{ cursor: 'pointer' }}
-                >
-                  <span>
-                    <strong>Round {m.round}:</strong>{" "}
-                    {m.team1?.name} <strong style={{ color: "red" }}>vs</strong>{" "}
-                    {m.team2_id === null ? (
-                      <span className="text-muted">BYE</span>
-                    ) : (
-                      m.team2?.name
-                    )}
-                  </span>
+            <>
+              <div className="form-check mb-2">
+                <input
+                  className="form-check-input"
+                  type="checkbox"
+                  id="hideCompleted"
+                  checked={hideCompleted}
+                  onChange={(e) => setHideCompleted(e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="hideCompleted">
+                  Hide completed matches
+                </label>
+              </div>
+              <ul className="list-group">
+              {(() => {
+                const latestRound = matches.length > 0 ? Math.max(...matches.map(m => m.round || 1)) : 1;
+                const filteredMatches = hideCompleted ? matches.filter(m => !m.winner_id) : matches;
+                return filteredMatches.map((m) => (
+                  <li
+                    key={m.id}
+                    className="list-group-item d-flex justify-content-between align-items-center"
+                  style={{ cursor: 'pointer' }}
+                  >
+                    <span>
+                      <strong>Round {m.round}:</strong>{" "}
+                      {m.team1?.name} <strong style={{ color: "red" }}>vs</strong>{" "}
+                      {m.team2_id === null ? (
+                        <span className="text-muted">BYE</span>
+                      ) : (
+                        m.team2?.name
+                      )}
+                    </span>
 
-                  <span>
-                    {m.team1_score} - {m.team2_score}
-                  </span>
-                  
-                  <div className="d-flex gap-2">
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => playMatch(m)}
-                      disabled={m.team2_id === null}
-                    >
-                      Play Match
-                    </button>
-                    <button
-                      className={`btn btn-sm ${
-                        m.winner_id === m.team1_id
-                          ? "btn-success"
-                          : "btn-outline-success"
-                      }`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setWinner(m, m.team1_id);
-                      }}
-                      disabled={m.team2_id === null || Boolean(m.winner_id)}
-                    >
-                      {m.team1?.name} Wins
-                    </button>
-
-                    <button
-                      className={`btn btn-sm ${
-                        m.winner_id === m.team2_id
-                          ? "btn-success"
-                          : "btn-outline-success"
-                      }`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setWinner(m, m.team2_id);
-                      }}
-                      disabled={m.team2_id === null || Boolean(m.winner_id)}
-                    >
-                      {m.team2?.name} Wins
-                    </button>
-                  </div>
-                </li>
-              ))}
+                    <span>
+                      {m.team1_score} - {m.team2_score}
+                    </span>
+                    
+                    <div className="d-flex gap-2 align-items-center">
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => playMatch(m)}
+                        disabled={m.team2_id === null || m.round < latestRound}
+                      >
+                        Play Match
+                      </button>
+                      {m.winner_id && (
+                        <span className="badge bg-success fs-6">
+                          {m.winner_id === m.team1?.id ? m.team1.name : m.team2?.name} Wins!
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                ));
+              })()}
             </ul>
+            </>
           )}
         </>
       )}
@@ -938,4 +953,3 @@ export default function Tournament() {
     </div>
   );
 }
-
