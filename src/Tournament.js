@@ -19,6 +19,10 @@ export default function Tournament() {
   const [showTeamList, setShowTeamList] = useState(true);
   const [tournamentStarted, setTournamentStarted] = useState(false);
   const [hideCompleted, setHideCompleted] = useState(false);
+  const [showByeModal, setShowByeModal] = useState(false);
+  const [byeTeamOptions, setByeTeamOptions] = useState([]);
+  const [selectedByeTeamId, setSelectedByeTeamId] = useState(null);
+  const [pendingBracketData, setPendingBracketData] = useState(null);
 
   const hasBracket = selectedTournament && matches.length > 0;
 
@@ -315,6 +319,79 @@ export default function Tournament() {
     return true;
   };
 
+  // Assign teams to round 1 matches (shared helper)
+  const assignTeamsToRound1 = async (insertedMatches, shuffled, numByes, numTeams) => {
+    const round1Matches = insertedMatches
+      .filter(m => m.round === 1)
+      .sort((a, b) => a.position - b.position);
+
+    let teamIndex = 0;
+    for (let i = 0; i < round1Matches.length; i++) {
+      const match = round1Matches[i];
+      const isBye = i >= round1Matches.length - numByes;
+
+      if (isBye && teamIndex < numTeams) {
+        // Bye match - team auto-advances
+        await supabase
+          .from('matches')
+          .update({
+            team1_id: shuffled[teamIndex],
+            winner_id: shuffled[teamIndex]
+          })
+          .eq('id', match.id);
+        teamIndex++;
+      } else if (teamIndex + 1 < numTeams) {
+        // Regular match with two teams
+        await supabase
+          .from('matches')
+          .update({
+            team1_id: shuffled[teamIndex],
+            team2_id: shuffled[teamIndex + 1]
+          })
+          .eq('id', match.id);
+        teamIndex += 2;
+      }
+    }
+  };
+
+  // Handle user's bye team selection
+  const handleByeConfirm = async () => {
+    if (!selectedByeTeamId || !pendingBracketData) return;
+
+    setShowByeModal(false);
+
+    const { insertedMatches, teamIds, numByes, numTeams } = pendingBracketData;
+
+    // Put the selected team last so it gets assigned to a bye slot (byes are the last matches in round 1)
+    const remainingTeams = teamIds.filter(id => id !== selectedByeTeamId);
+    const shuffledRemaining = [...remainingTeams].sort(() => Math.random() - 0.5);
+    const shuffled = [...shuffledRemaining, selectedByeTeamId];
+
+    await assignTeamsToRound1(insertedMatches, shuffled, numByes, numTeams);
+    await propagateWinners(selectedTournament.id);
+    await fetchMatches(selectedTournament.id);
+
+    setPendingBracketData(null);
+  };
+
+  // Cancel bye selection and clean up
+  const handleByeCancel = async () => {
+    if (!pendingBracketData) return;
+
+    setShowByeModal(false);
+
+    // Delete the empty matches that were created
+    const { insertedMatches } = pendingBracketData;
+    const matchIds = insertedMatches.map(m => m.id);
+    await supabase
+      .from('matches')
+      .delete()
+      .in('id', matchIds);
+
+    setPendingBracketData(null);
+    setSelectedByeTeamId(null);
+  };
+
   // Propagate winners to next match slots
   const propagateWinners = async (tournamentId) => {
     const { data: allMatches } = await supabase
@@ -384,9 +461,6 @@ export default function Tournament() {
     const totalSlots = Math.pow(2, rounds);
     const numByes = totalSlots - numTeams;
 
-    // Shuffle teams randomly
-    const shuffled = [...teamIds].sort(() => Math.random() - 0.5);
-
     // Create all match slots for all rounds
     const allMatches = [];
     for (let r = 1; r <= rounds; r++) {
@@ -435,42 +509,25 @@ export default function Tournament() {
       }
     }
 
-    // Assign teams to round 1 matches
-    const round1Matches = insertedMatches
-      .filter(m => m.round === 1)
-      .sort((a, b) => a.position - b.position);
-
-    let teamIndex = 0;
-    for (let i = 0; i < round1Matches.length; i++) {
-      const match = round1Matches[i];
-      const isBye = i >= round1Matches.length - numByes;
-
-      if (isBye && teamIndex < numTeams) {
-        // Bye match - team auto-advances
-        await supabase
-          .from('matches')
-          .update({
-            team1_id: shuffled[teamIndex],
-            winner_id: shuffled[teamIndex]
-          })
-          .eq('id', match.id);
-        teamIndex++;
-      } else if (teamIndex + 1 < numTeams) {
-        // Regular match with two teams
-        await supabase
-          .from('matches')
-          .update({
-            team1_id: shuffled[teamIndex],
-            team2_id: shuffled[teamIndex + 1]
-          })
-          .eq('id', match.id);
-        teamIndex += 2;
-      }
+    // If there are byes, ask user to select which team gets the bye
+    if (numByes > 0) {
+      setPendingBracketData({
+        insertedMatches,
+        teamIds,
+        numByes,
+        numTeams,
+        rounds
+      });
+      setByeTeamOptions(teamList);
+      setSelectedByeTeamId(null);
+      setShowByeModal(true);
+      return;
     }
 
-    // Propagate bye winners to next match slots
+    // No byes - shuffle and assign teams normally
+    const shuffled = [...teamIds].sort(() => Math.random() - 0.5);
+    await assignTeamsToRound1(insertedMatches, shuffled, numByes, numTeams);
     await propagateWinners(selectedTournament.id);
-
     await fetchMatches(selectedTournament.id);
   };
 
@@ -877,6 +934,45 @@ export default function Tournament() {
               <div className="modal-footer">
                 <button className="btn btn-secondary" onClick={() => setShowOddPlayerModal(false)}>
                   Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bye Selection Modal */}
+      {showByeModal && (
+        <div className="modal d-block" tabIndex="-1" style={{ background: "rgba(0,0,0,0.5)" }}>
+          <div className="modal-dialog">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Select Team for Bye</h5>
+              </div>
+              <div className="modal-body">
+                <p>There are an odd number of teams. Select <strong>1 team</strong> to receive a bye (auto-advance to the next round):</p>
+                <div className="list-group">
+                  {byeTeamOptions.map((team) => (
+                    <button
+                      key={team.id}
+                      className={`list-group-item list-group-item-action ${selectedByeTeamId === team.id ? 'active' : ''}`}
+                      onClick={() => setSelectedByeTeamId(team.id)}
+                    >
+                      {team.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={handleByeCancel}>
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleByeConfirm}
+                  disabled={!selectedByeTeamId}
+                >
+                  Confirm Bye
                 </button>
               </div>
             </div>
