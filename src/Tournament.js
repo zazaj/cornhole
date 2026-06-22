@@ -23,6 +23,7 @@ export default function Tournament() {
   const [byeTeamOptions, setByeTeamOptions] = useState([]);
   const [selectedByeTeamId, setSelectedByeTeamId] = useState(null);
   const [pendingBracketData, setPendingBracketData] = useState(null);
+  const [viewMode, setViewMode] = useState('round'); // 'round' or 'bracket'
 
   const hasBracket = selectedTournament && matches.length > 0;
 
@@ -822,99 +823,170 @@ export default function Tournament() {
 
           {showBracket && (
             <>
-              <div className="form-check mb-2">
-                <input
-                  className="form-check-input"
-                  type="checkbox"
-                  id="hideCompleted"
-                  checked={hideCompleted}
-                  onChange={(e) => setHideCompleted(e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="hideCompleted">
-                  Hide completed matches
-                </label>
+              {/* View Toggle */}
+              <div className="btn-group mb-3" role="group">
+                <button
+                  className={`btn ${viewMode === 'round' ? 'btn-primary' : 'btn-outline-primary'}`}
+                  onClick={() => setViewMode('round')}
+                >
+                  Round View
+                </button>
+                <button
+                  className={`btn ${viewMode === 'bracket' ? 'btn-primary' : 'btn-outline-primary'}`}
+                  onClick={() => setViewMode('bracket')}
+                >
+                  Bracket View
+                </button>
               </div>
 
-              {/* Group matches by round for bracket display */}
-              {(() => {
-                const maxRound = matches.length > 0 ? Math.max(...matches.map(m => m.round || 1)) : 1;
-                const rounds = [];
-                for (let r = 1; r <= maxRound; r++) {
-                  const roundMatches = matches
-                    .filter(m => m.round === r)
-                    .sort((a, b) => a.position - b.position);
-                  rounds.push({ round: r, matches: roundMatches });
-                }
+              {viewMode === 'round' && (
+                <>
+                  <div className="form-check mb-2">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="hideCompleted"
+                      checked={hideCompleted}
+                      onChange={(e) => setHideCompleted(e.target.checked)}
+                    />
+                    <label className="form-check-label" htmlFor="hideCompleted">
+                      Hide completed matches
+                    </label>
+                  </div>
 
-                return rounds.map(({ round, matches: roundMatches }) => {
-                  const filteredMatches = hideCompleted
-                    ? roundMatches.filter(m => !m.winner_id)
-                    : roundMatches;
+                  {/* Group matches by round for round display */}
+                  {(() => {
+                    const maxRound = matches.length > 0 ? Math.max(...matches.map(m => m.round || 1)) : 1;
+                    const rounds = [];
+                    for (let r = 1; r <= maxRound; r++) {
+                      const roundMatches = matches
+                        .filter(m => m.round === r)
+                        .sort((a, b) => a.position - b.position);
+                      rounds.push({ round: r, matches: roundMatches });
+                    }
 
-                  if (filteredMatches.length === 0) return null;
+                    return rounds.map(({ round, matches: roundMatches }) => {
+                      const filteredMatches = hideCompleted
+                        ? roundMatches.filter(m => !m.winner_id)
+                        : roundMatches;
 
-                  const roundLabel = round === maxRound ? 'Final' :
-                    round === maxRound - 1 ? 'Semifinals' :
-                    round === maxRound - 2 ? 'Quarterfinals' :
-                    `Round ${round}`;
+                      if (filteredMatches.length === 0) return null;
 
-                  return (
-                    <div key={round} className="mb-4">
-                      <h5 className="text-muted mb-2">{roundLabel}</h5>
-                      <ul className="list-group">
-                        {filteredMatches.map((m) => {
-                          const nextInfo = getNextMatchInfo(m);
-                          return (
-                            <li
-                              key={m.id}
-                              className="list-group-item d-flex justify-content-between align-items-center"
-                              style={{ cursor: 'pointer' }}
-                            >
-                              <div className="d-flex flex-column">
-                                <span>
-                                  <strong>Match {m.position + 1}:</strong>{" "}
-                                  {m.team1?.name || (
-                                    <span className="text-muted fst-italic">TBD</span>
-                                  )}{" "}
-                                  <strong style={{ color: "red" }}>vs</strong>{" "}
-                                  {m.team2_id === null ? (
-                                    <span className="text-muted">BYE</span>
-                                  ) : m.team2?.name || (
-                                    <span className="text-muted fst-italic">TBD</span>
-                                  )}
-                                </span>
-                                {nextInfo && (
-                                  <small className="text-muted mt-1">
-                                    → Winner advances to {nextInfo.match.round === maxRound ? 'Final' : `Round ${nextInfo.match.round}`} Match {nextInfo.match.position + 1} as {nextInfo.slot}
-                                  </small>
-                                )}
-                              </div>
+                      const roundLabel = round === maxRound ? 'Final' :
+                        round === maxRound - 1 ? 'Semifinals' :
+                        round === maxRound - 2 ? 'Quarterfinals' :
+                        `Round ${round}`;
 
-                              <div className="d-flex gap-2 align-items-center">
-                                <span className="me-2">
-                                  {m.team1_score} - {m.team2_score}
-                                </span>
-                                <button
-                                  className="btn btn-primary btn-sm"
-                                  onClick={() => playMatch(m)}
-                                  disabled={!m.team1_id || !m.team2_id || m.winner_id}
+                      return (
+                        <div key={round} className="mb-4">
+                          <h5 className="text-muted mb-2">{roundLabel}</h5>
+                          <ul className="list-group">
+                            {filteredMatches.map((m) => {
+                              const nextInfo = getNextMatchInfo(m);
+                              return (
+                                <li
+                                  key={m.id}
+                                  className="list-group-item d-flex justify-content-between align-items-center"
+                                  style={{ cursor: 'pointer' }}
                                 >
-                                  Play Match
-                                </button>
-                                {m.winner_id && (
-                                  <span className="badge bg-success fs-6">
-                                    {m.winner_id === m.team1?.id ? m.team1.name : m.team2?.name} Wins!
-                                  </span>
-                                )}
-                              </div>
-                            </li>
+                                  <div className="d-flex flex-column">
+                                    <span>
+                                      <strong>Match {m.position + 1}:</strong>{" "}
+                                      {m.team1?.name || (
+                                        <span className="text-muted fst-italic">TBD</span>
+                                      )}{" "}
+                                      <strong style={{ color: "red" }}>vs</strong>{" "}
+                                      {m.team2_id === null ? (
+                                        <span className="text-muted">BYE</span>
+                                      ) : m.team2?.name || (
+                                        <span className="text-muted fst-italic">TBD</span>
+                                      )}
+                                    </span>
+                                    {nextInfo && (
+                                      <small className="text-muted mt-1">
+                                        → Winner advances to {nextInfo.match.round === maxRound ? 'Final' : `Round ${nextInfo.match.round}`} Match {nextInfo.match.position + 1} as {nextInfo.slot}
+                                      </small>
+                                    )}
+                                  </div>
+
+                                  <div className="d-flex gap-2 align-items-center">
+                                    <span className="me-2">
+                                      {m.team1_score} - {m.team2_score}
+                                    </span>
+                                    <button
+                                      className="btn btn-primary btn-sm"
+                                      onClick={() => playMatch(m)}
+                                      disabled={!m.team1_id || !m.team2_id || m.winner_id}
+                                    >
+                                      Play Match
+                                    </button>
+                                    {m.winner_id && (
+                                      <span className="badge bg-success fs-6">
+                                        {m.winner_id === m.team1?.id ? m.team1.name : m.team2?.name} Wins!
+                                      </span>
+                                    )}
+                                  </div>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      );
+                    });
+                  })()}
+                </>
+              )}
+
+              {viewMode === 'bracket' && (
+                <div className="bracket-view">
+                  {(() => {
+                    const maxRound = matches.length > 0 ? Math.max(...matches.map(m => m.round || 1)) : 1;
+                    const rounds = [];
+                    for (let r = 1; r <= maxRound; r++) {
+                      const roundMatches = matches
+                        .filter(m => m.round === r)
+                        .sort((a, b) => a.position - b.position);
+                      rounds.push({ round: r, matches: roundMatches });
+                    }
+
+                    return (
+                      <div className="bracket-container d-flex justify-content-center" style={{ overflowX: 'auto' }}>
+                        {rounds.map(({ round, matches: roundMatches }) => {
+                          const roundLabel = round === maxRound ? 'Final' :
+                            round === maxRound - 1 ? 'Semifinals' :
+                            round === maxRound - 2 ? 'Quarterfinals' :
+                            `Round ${round}`;
+                          return (
+                            <div key={round} className="bracket-round">
+                              <div className="bracket-round-label">{roundLabel}</div>
+                              {roundMatches.map((m) => (
+                                <div key={m.id} className={`bracket-match ${m.winner_id ? 'bracket-match-completed' : ''}`}>
+                                  <div
+                                    className={`bracket-team ${m.winner_id === m.team1?.id ? 'bracket-team-winner' : ''}`}
+                                    onClick={() => m.team1_id && m.team2_id && !m.winner_id && playMatch(m)}
+                                    style={{ cursor: m.team1_id && m.team2_id && !m.winner_id ? 'pointer' : 'default' }}
+                                  >
+                                    <span className="bracket-team-name">{m.team1?.name || 'TBD'}</span>
+                                    <span className="bracket-team-score">{m.team1_score ?? ''}</span>
+                                  </div>
+                                  <div
+                                    className={`bracket-team ${m.winner_id === m.team2?.id ? 'bracket-team-winner' : ''}`}
+                                    onClick={() => m.team1_id && m.team2_id && !m.winner_id && playMatch(m)}
+                                    style={{ cursor: m.team1_id && m.team2_id && !m.winner_id ? 'pointer' : 'default' }}
+                                  >
+                                    <span className="bracket-team-name">{m.team2?.name || (m.team2_id === null ? 'BYE' : 'TBD')}</span>
+                                    <span className="bracket-team-score">{m.team2_score ?? ''}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           );
                         })}
-                      </ul>
-                    </div>
-                  );
-                });
-              })()}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </>
           )}
         </>
