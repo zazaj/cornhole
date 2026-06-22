@@ -17,15 +17,12 @@ export default function Tournament() {
   const [matches, setMatches] = useState([]);
   const [showBracket, setShowBracket] = useState(false);
   const [showTeamList, setShowTeamList] = useState(true);
-  const [byeCandidates, setByeCandidates] = useState([]);
-  const [showByeModal, setShowByeModal] = useState(false);
-  const [pendingRoundData, setPendingRoundData] = useState(null);
   const [tournamentStarted, setTournamentStarted] = useState(false);
   const [hideCompleted, setHideCompleted] = useState(false);
 
   const hasBracket = selectedTournament && matches.length > 0;
 
-  // Check if tournament has a champion (highest round match has a winner)
+  // Check if tournament has a champion (final match has a winner)
   const hasChampion = matches.length > 0 && (() => {
     const maxRound = Math.max(...matches.map(m => m.round || 1));
     const finalMatches = matches.filter(m => m.round === maxRound);
@@ -318,7 +315,34 @@ export default function Tournament() {
     return true;
   };
 
-  // Generate bracket
+  // Propagate winners to next match slots
+  const propagateWinners = async (tournamentId) => {
+    const { data: allMatches } = await supabase
+      .from('matches')
+      .select('*')
+      .eq('tournament_id', tournamentId);
+
+    if (!allMatches) return;
+
+    for (const match of allMatches) {
+      if (match.winner_id && match.next_match_id) {
+        const nextMatch = allMatches.find(m => m.id === match.next_match_id);
+        if (!nextMatch) continue;
+
+        const slotField = match.next_team_slot === 1 ? 'team1_id' : 'team2_id';
+
+        // Only update if the slot is empty
+        if (!nextMatch[slotField]) {
+          await supabase
+            .from('matches')
+            .update({ [slotField]: match.winner_id })
+            .eq('id', nextMatch.id);
+        }
+      }
+    }
+  };
+
+  // Generate full bracket upfront
   const generateBracket = async () => {
     if (!selectedTournament) return;
 
@@ -354,33 +378,99 @@ export default function Tournament() {
       return;
     }
 
-    if (teamIds.length % 2 !== 0) {
-      setByeCandidates(teamIds);
-      setPendingRoundData({
-        tournamentId: selectedTournament.id,
-        round: 1,
-        initial: true,
-        teamIds
-      });
-      setShowByeModal(true);
+    // Calculate bracket structure
+    const numTeams = teamIds.length;
+    const rounds = Math.ceil(Math.log2(numTeams));
+    const totalSlots = Math.pow(2, rounds);
+    const numByes = totalSlots - numTeams;
+
+    // Shuffle teams randomly
+    const shuffled = [...teamIds].sort(() => Math.random() - 0.5);
+
+    // Create all match slots for all rounds
+    const allMatches = [];
+    for (let r = 1; r <= rounds; r++) {
+      const matchesInRound = totalSlots / Math.pow(2, r);
+      for (let p = 0; p < matchesInRound; p++) {
+        allMatches.push({
+          tournament_id: selectedTournament.id,
+          round: r,
+          position: p,
+          team1_id: null,
+          team2_id: null,
+          winner_id: null,
+          next_match_id: null,
+          next_team_slot: null
+        });
+      }
+    }
+
+    // Insert all matches
+    const { data: insertedMatches, error: insertError } = await supabase
+      .from('matches')
+      .insert(allMatches)
+      .select();
+
+    if (insertError) {
+      console.error('Insert matches error:', JSON.stringify(insertError, null, 2));
+      alert('Failed to generate bracket: ' + (insertError.message || JSON.stringify(insertError)));
       return;
     }
 
-    // Shuffle teams so they're randomly paired (not grouped by type)
-    const shuffled = [...teamIds].sort(() => Math.random() - 0.5);
+    // Link each match to its next match
+    for (const match of insertedMatches) {
+      if (match.round < rounds) {
+        const nextPosition = Math.floor(match.position / 2);
+        const nextTeamSlot = (match.position % 2) + 1;
+        const nextMatch = insertedMatches.find(
+          m => m.round === match.round + 1 && m.position === nextPosition
+        );
 
-    const matches = [];
-
-    for (let i = 0; i < shuffled.length; i += 2) {
-      matches.push({
-        tournament_id: selectedTournament.id,
-        team1_id: shuffled[i],
-        team2_id: shuffled[i + 1],
-        round: 1
-      });
+        if (nextMatch) {
+          await supabase
+            .from('matches')
+            .update({ next_match_id: nextMatch.id, next_team_slot: nextTeamSlot })
+            .eq('id', match.id);
+        }
+      }
     }
 
-    await supabase.from('matches').insert(matches);
+    // Assign teams to round 1 matches
+    const round1Matches = insertedMatches
+      .filter(m => m.round === 1)
+      .sort((a, b) => a.position - b.position);
+
+    let teamIndex = 0;
+    for (let i = 0; i < round1Matches.length; i++) {
+      const match = round1Matches[i];
+      const isBye = i >= round1Matches.length - numByes;
+
+      if (isBye && teamIndex < numTeams) {
+        // Bye match - team auto-advances
+        await supabase
+          .from('matches')
+          .update({
+            team1_id: shuffled[teamIndex],
+            winner_id: shuffled[teamIndex]
+          })
+          .eq('id', match.id);
+        teamIndex++;
+      } else if (teamIndex + 1 < numTeams) {
+        // Regular match with two teams
+        await supabase
+          .from('matches')
+          .update({
+            team1_id: shuffled[teamIndex],
+            team2_id: shuffled[teamIndex + 1]
+          })
+          .eq('id', match.id);
+        teamIndex += 2;
+      }
+    }
+
+    // Propagate bye winners to next match slots
+    await propagateWinners(selectedTournament.id);
+
     await fetchMatches(selectedTournament.id);
   };
 
@@ -400,17 +490,21 @@ export default function Tournament() {
         team2:team2_id(id, name)
       `)
       .eq('tournament_id', tournamentId)
-      .order('round', { ascending: true });
+      .order('round', { ascending: true })
+      .order('position', { ascending: true });
 
     setMatches(data || []);
-    if (data && data.length > 0) {
-      await advanceRound(tournamentId);
-    }
   };
 
   // Play match
   const playMatch = (m) => {
-    const latestRound = matches.length > 0 ? Math.max(...matches.map(m => m.round || 1)) : 1;
+    // Find the current active round: lowest round that still has playable unfinished matches
+    const unfinishedRounds = matches
+      .filter(m => !m.winner_id && m.team1_id && m.team2_id)
+      .map(m => m.round);
+    const currentRound = unfinishedRounds.length > 0
+      ? Math.min(...unfinishedRounds)
+      : Math.max(...matches.map(m => m.round || 1));
     navigate('/', {
       state: {
         matchId: m.id,
@@ -421,7 +515,9 @@ export default function Tournament() {
         team2_score: m.team2_score ?? 0,
         winner_id: m.winner_id ?? null,
         round: m.round,
-        latestRound: latestRound
+        latestRound: currentRound,
+        next_match_id: m.next_match_id,
+        next_team_slot: m.next_team_slot
       }
     });
   };
@@ -461,182 +557,16 @@ export default function Tournament() {
     }
   };
 
-  // Advance round if all matches in current round are finished
-  const advanceRound = async (tournamentId) => {
-    const { data: matchesData } = await supabase
-      .from('matches')
-      .select('*')
-      .eq('tournament_id', tournamentId)
-      .order('round', { ascending: true });
-
-    const matches = matchesData || [];
-    if (matches.length === 0) return;
-
-    if (matches.length === 1 && matches[0].winner_id) {
-      console.log("🏆 Tournament finished");
-      return;
-    }
-
-    const latestRound = Math.max(...matches.map(m => m.round || 1));
-    const currentRoundMatches = matches.filter(m => m.round === latestRound);
-
-    const unfinished = currentRoundMatches.filter(m => !m.winner_id);
-    if (unfinished.length > 0) return;
-
-    const winners = currentRoundMatches.map(m => m.winner_id);
-
-    if (winners.length === 1) {
-      console.log("Champion determined:", winners[0]);
-      return;
-    }
-
-    if (winners.length % 2 !== 0) {
-      setByeCandidates(winners);
-      setPendingRoundData({ tournamentId, round: latestRound });
-      setShowByeModal(true);
-      return;
-    }
-
-    const nextRound = latestRound + 1;
-    await createNextRound(tournamentId, nextRound, winners);
+  // Get the next match info for display
+  const getNextMatchInfo = (match) => {
+    if (!match.next_match_id) return null;
+    const nextMatch = matches.find(m => m.id === match.next_match_id);
+    if (!nextMatch) return null;
+    return {
+      match: nextMatch,
+      slot: match.next_team_slot === 1 ? 'Team 1' : 'Team 2'
+    };
   };
-
-  const createNextRound = async (tournamentId, nextRound, winners, byeTeamId = null) => {
-    const { data: existingNext } = await supabase
-      .from('matches')
-      .select('id')
-      .eq('tournament_id', tournamentId)
-      .eq('round', nextRound);
-
-    const existing = existingNext || [];
-    if (existing.length > 0) return;
-
-    if (winners.length < 2) return;
-    let pool = [...winners];
-
-    const matches = [];
-
-    // remove bye team if selected
-    if (byeTeamId) {
-      pool = pool.filter(id => id !== byeTeamId);
-
-      // auto-insert bye advancement match
-      matches.push({
-        tournament_id: tournamentId,
-        team1_id: byeTeamId,
-        team2_id: null,
-        winner_id: byeTeamId,
-        round: nextRound
-      });
-    }
-
-    for (let i = 0; i < pool.length; i += 2) {
-      if (pool[i + 1]) {
-        matches.push({
-          tournament_id: tournamentId,
-          team1_id: pool[i],
-          team2_id: pool[i + 1],
-          round: nextRound
-        });
-      }
-    }
-
-    await supabase.from('matches').insert(matches);
-
-    await fetchMatches(tournamentId);
-  };
-
-  // const getNextRound = async (tournamentId) => {
-  //   const { data } = await supabase
-  //     .from('matches')
-  //     .select('round')
-  //     .eq('tournament_id', tournamentId);
-
-  //   if (!data || data.length === 0) return 1;
-
-  //   return Math.max(...data.map(m => m.round || 1)) + 1;
-  // };
-
-  const handleSelectBye = async (teamId) => {
-    setShowByeModal(false);
-
-    const { tournamentId, round, initial, teamIds } = pendingRoundData || {};
-    const nextRound = round + 1;
-    const newMatches = [];
-
-    if (initial) {
-      const pairIds = (teamIds || byeCandidates).filter(id => id !== teamId);
-
-      for (let i = 0; i < pairIds.length; i += 2) {
-        newMatches.push({
-          tournament_id: tournamentId,
-          team1_id: pairIds[i],
-          team2_id: pairIds[i + 1],
-          round
-        });
-      }
-
-      newMatches.push({
-        tournament_id: tournamentId,
-        team1_id: teamId,
-        team2_id: null,
-        winner_id: teamId,
-        round
-      });
-
-      await supabase.from('matches').insert(newMatches);
-      await fetchMatches(tournamentId);
-      setByeCandidates([]);
-      setPendingRoundData(null);
-      return;
-    }
-
-    const { data: matchesData } = await supabase
-      .from('matches')
-      .select('*')
-      .eq('tournament_id', tournamentId)
-      .eq('round', round);
-
-    const winners = matchesData
-      .map(m => m.winner_id)
-      .filter(id => id && id !== teamId);
-
-    for (let i = 0; i < winners.length; i += 2) {
-      if (winners[i + 1]) {
-        newMatches.push({
-          tournament_id: tournamentId,
-          team1_id: winners[i],
-          team2_id: winners[i + 1],
-          round: nextRound
-        });
-      }
-    }
-
-    newMatches.push({
-      tournament_id: tournamentId,
-      team1_id: teamId,
-      team2_id: null,
-      winner_id: teamId,
-      round: nextRound
-    });
-
-    await supabase.from('matches').insert(newMatches);
-    await fetchMatches(tournamentId);
-
-    setByeCandidates([]);
-    setPendingRoundData(null);
-  };
-
-  // const getCurrentRound = async (tournamentId) => {
-  //   const { data } = await supabase
-  //     .from('matches')
-  //     .select('round')
-  //     .eq('tournament_id', tournamentId);
-
-  //   if (!data || data.length === 0) return 1;
-
-  //   return Math.max(...data.map(m => m.round || 1));
-  // };
 
   useEffect(() => {
     fetchTournaments();
@@ -847,87 +777,90 @@ export default function Tournament() {
                   Hide completed matches
                 </label>
               </div>
-              <ul className="list-group">
-              {(() => {
-                const latestRound = matches.length > 0 ? Math.max(...matches.map(m => m.round || 1)) : 1;
-                const filteredMatches = hideCompleted ? matches.filter(m => !m.winner_id) : matches;
-                return filteredMatches.map((m) => (
-                  <li
-                    key={m.id}
-                    className="list-group-item d-flex justify-content-between align-items-center"
-                  style={{ cursor: 'pointer' }}
-                  >
-                    <span>
-                      <strong>Round {m.round}:</strong>{" "}
-                      {m.team1?.name} <strong style={{ color: "red" }}>vs</strong>{" "}
-                      {m.team2_id === null ? (
-                        <span className="text-muted">BYE</span>
-                      ) : (
-                        m.team2?.name
-                      )}
-                    </span>
 
-                    <span>
-                      {m.team1_score} - {m.team2_score}
-                    </span>
-                    
-                    <div className="d-flex gap-2 align-items-center">
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => playMatch(m)}
-                        disabled={m.team2_id === null || m.round < latestRound}
-                      >
-                        Play Match
-                      </button>
-                      {m.winner_id && (
-                        <span className="badge bg-success fs-6">
-                          {m.winner_id === m.team1?.id ? m.team1.name : m.team2?.name} Wins!
-                        </span>
-                      )}
+              {/* Group matches by round for bracket display */}
+              {(() => {
+                const maxRound = matches.length > 0 ? Math.max(...matches.map(m => m.round || 1)) : 1;
+                const rounds = [];
+                for (let r = 1; r <= maxRound; r++) {
+                  const roundMatches = matches
+                    .filter(m => m.round === r)
+                    .sort((a, b) => a.position - b.position);
+                  rounds.push({ round: r, matches: roundMatches });
+                }
+
+                return rounds.map(({ round, matches: roundMatches }) => {
+                  const filteredMatches = hideCompleted
+                    ? roundMatches.filter(m => !m.winner_id)
+                    : roundMatches;
+
+                  if (filteredMatches.length === 0) return null;
+
+                  const roundLabel = round === maxRound ? 'Final' :
+                    round === maxRound - 1 ? 'Semifinals' :
+                    round === maxRound - 2 ? 'Quarterfinals' :
+                    `Round ${round}`;
+
+                  return (
+                    <div key={round} className="mb-4">
+                      <h5 className="text-muted mb-2">{roundLabel}</h5>
+                      <ul className="list-group">
+                        {filteredMatches.map((m) => {
+                          const nextInfo = getNextMatchInfo(m);
+                          return (
+                            <li
+                              key={m.id}
+                              className="list-group-item d-flex justify-content-between align-items-center"
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <div className="d-flex flex-column">
+                                <span>
+                                  <strong>Match {m.position + 1}:</strong>{" "}
+                                  {m.team1?.name || (
+                                    <span className="text-muted fst-italic">TBD</span>
+                                  )}{" "}
+                                  <strong style={{ color: "red" }}>vs</strong>{" "}
+                                  {m.team2_id === null ? (
+                                    <span className="text-muted">BYE</span>
+                                  ) : m.team2?.name || (
+                                    <span className="text-muted fst-italic">TBD</span>
+                                  )}
+                                </span>
+                                {nextInfo && (
+                                  <small className="text-muted mt-1">
+                                    → Winner advances to {nextInfo.match.round === maxRound ? 'Final' : `Round ${nextInfo.match.round}`} Match {nextInfo.match.position + 1} as {nextInfo.slot}
+                                  </small>
+                                )}
+                              </div>
+
+                              <div className="d-flex gap-2 align-items-center">
+                                <span className="me-2">
+                                  {m.team1_score} - {m.team2_score}
+                                </span>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => playMatch(m)}
+                                  disabled={!m.team1_id || !m.team2_id || m.winner_id}
+                                >
+                                  Play Match
+                                </button>
+                                {m.winner_id && (
+                                  <span className="badge bg-success fs-6">
+                                    {m.winner_id === m.team1?.id ? m.team1.name : m.team2?.name} Wins!
+                                  </span>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
                     </div>
-                  </li>
-                ));
+                  );
+                });
               })()}
-            </ul>
             </>
           )}
         </>
-      )}
-      {showByeModal && (
-        <div className="modal d-block" tabIndex="-1" style={{ background: "rgba(0,0,0,0.5)" }}>
-          <div className="modal-dialog">
-            <div className="modal-content">
-
-              <div className="modal-header">
-                <h5 className="modal-title">Select Bye Team</h5>
-              </div>
-
-              <div className="modal-body">
-                <p>Odd number of teams detected. Choose one team to advance:</p>
-
-                <ul className="list-group">
-                  {byeCandidates.map((teamId) => {
-                    const team =
-                      teams.find(t => t.id === teamId) ||
-                      matches.flatMap(m => [m.team1, m.team2]).find(t => t?.id === teamId);
-
-                    return (
-                      <li
-                        key={teamId}
-                        className="list-group-item list-group-item-action"
-                        style={{ cursor: "pointer" }}
-                        onClick={() => handleSelectBye(teamId)}
-                      >
-                        {team?.name || "Unknown Team"}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-
-            </div>
-          </div>
-        </div>
       )}
 
       {showOddPlayerModal && (

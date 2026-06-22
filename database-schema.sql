@@ -27,12 +27,15 @@ CREATE TABLE players (
 CREATE TABLE matches (
   id SERIAL PRIMARY KEY,
   tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE,
+  round INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0,
   team1_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
   team2_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
   team1_score INTEGER NOT NULL DEFAULT 0,
   team2_score INTEGER NOT NULL DEFAULT 0,
   winner_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
-  round INTEGER NOT NULL DEFAULT 1,
+  next_match_id INTEGER REFERENCES matches(id) ON DELETE SET NULL,
+  next_team_slot INTEGER CHECK (next_team_slot IN (1, 2)),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

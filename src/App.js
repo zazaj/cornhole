@@ -57,6 +57,17 @@ function Home({ navigate, ...props }) {
         team === 2 ? nextScore : otherScore,
         winner_id
       );
+
+      // Auto-advance winner to next match slot in the bracket
+      const nextMatchId = match?.next_match_id;
+      const nextTeamSlot = match?.next_team_slot;
+      if (nextMatchId && nextTeamSlot) {
+        const slotField = nextTeamSlot === 1 ? 'team1_id' : 'team2_id';
+        await supabase
+          .from('matches')
+          .update({ [slotField]: winner_id })
+          .eq('id', nextMatchId);
+      }
     }
 
     setWinnerId(winner_id || `${team}`);
