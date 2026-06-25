@@ -67,6 +67,42 @@ function Home({ navigate, ...props }) {
           .from('matches')
           .update({ [slotField]: winner_id })
           .eq('id', nextMatchId);
+
+        // Propagate through subsequent bye matches only.
+        // A bye match has only team1_id, no team2_id, and no winner_id.
+        // This handles cases like 6 teams where round 2 has a structural bye
+        // that couldn't be resolved during bracket generation (circular dependency resolved here).
+        let cmId = nextMatchId;
+        while (true) {
+          const { data: cm } = await supabase
+            .from('matches')
+            .select('*')
+            .eq('id', cmId)
+            .single();
+
+          if (!cm) break;
+
+          // Only auto-complete if this is a pure bye (one team, no opponent)
+          if (!(cm.team1_id && !cm.team2_id && !cm.winner_id)) break;
+
+          // Auto-complete the bye match: the sole team advances
+          await supabase
+            .from('matches')
+            .update({ winner_id: cm.team1_id })
+            .eq('id', cm.id);
+
+          // Propagate this bye winner to the next match (if any)
+          if (!cm.next_match_id) break;
+
+          const nextSlotField = cm.next_team_slot === 1 ? 'team1_id' : 'team2_id';
+          await supabase
+            .from('matches')
+            .update({ [nextSlotField]: cm.team1_id })
+            .eq('id', cm.next_match_id);
+
+          // Continue to the next match, checking if THAT is also a bye
+          cmId = cm.next_match_id;
+        }
       }
     }
 
