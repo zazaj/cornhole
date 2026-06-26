@@ -248,11 +248,35 @@ export default function Tournament() {
       return;
     }
 
-    // Link matches to next matches
+    // Link matches to next matches with rotated pairing for bye distribution.
+    // When a round has byes, a simple floor(p/2) pairing would send the same
+    // bracket branch into the bye slot repeatedly, giving one team multiple
+    // byes (e.g. 10 teams: R1's last match feeds R2's bye, then R2's bye
+    // feeds R3's bye — one team skips to the final).
+    //
+    // Fix: rotate the offset so each round's bye slot draws from a different
+    // branch of the previous round, distributing byes fairly.
+    //
+    // For each match at position p in round r feeding into round r+1:
+    //   offset = (p + nextRound.byes) % currentRound.totalSlots
+    //   nextPosition = floor(offset / 2)
+    //   nextTeamSlot = (offset % 2) + 1
     for (const match of insertedMatches) {
       if (match.round < numRounds) {
-        const nextPosition = Math.floor(match.position / 2);
-        const nextTeamSlot = (match.position % 2) + 1;
+        const currentRoundData = roundStructure[match.round - 1];
+        const nextRoundData = roundStructure[match.round];
+
+        let nextPosition;
+        let nextTeamSlot;
+        if (nextRoundData.byes > 0) {
+          const offset = (match.position + nextRoundData.byes) % currentRoundData.totalSlots;
+          nextPosition = Math.floor(offset / 2);
+          nextTeamSlot = (offset % 2) + 1;
+        } else {
+          nextPosition = Math.floor(match.position / 2);
+          nextTeamSlot = (match.position % 2) + 1;
+        }
+
         const nextMatch = insertedMatches.find(
           m => m.round === match.round + 1 && m.position === nextPosition
         );
