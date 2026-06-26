@@ -36,6 +36,7 @@ CREATE TABLE matches (
   winner_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
   next_match_id INTEGER REFERENCES matches(id) ON DELETE SET NULL,
   next_team_slot INTEGER CHECK (next_team_slot IN (1, 2)),
+  is_bye BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

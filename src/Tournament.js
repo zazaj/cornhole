@@ -18,6 +18,11 @@ export default function Tournament() {
   const [playerError, setPlayerError] = useState('');
 
   const [matches, setMatches] = useState([]);
+  const [viewMode, setViewMode] = useState('round');
+  const [showByeModal, setShowByeModal] = useState(false);
+  const [byeTeamOptions, setByeTeamOptions] = useState([]);
+  const [selectedByeTeamId, setSelectedByeTeamId] = useState(null);
+  const [pendingBracketData, setPendingBracketData] = useState(null);
 
   const hasBracket = matches.length > 0;
 
@@ -213,11 +218,12 @@ export default function Tournament() {
 
     const numRounds = roundStructure.length;
 
-    // Create all match slots
+    // Create all match slots, marking structural byes with is_bye
     const allMatchData = [];
     for (let r = 0; r < numRounds; r++) {
       const round = roundStructure[r];
       for (let p = 0; p < round.totalSlots; p++) {
+        const isBye = p >= round.matchesCount;
         allMatchData.push({
           tournament_id: selectedTournament.id,
           round: r + 1,
@@ -226,7 +232,8 @@ export default function Tournament() {
           team2_id: null,
           winner_id: null,
           next_match_id: null,
-          next_team_slot: null
+          next_team_slot: null,
+          is_bye: isBye
         });
       }
     }
@@ -262,33 +269,86 @@ export default function Tournament() {
     // Assign teams to round 1
     const round1Matches = insertedMatches.filter(m => m.round === 1);
     const round1Byes = roundStructure[0].byes;
+
+    // If round 1 has byes (odd team count), ask user which team gets the bye
+    if (round1Byes > 0) {
+      setPendingBracketData({
+        insertedMatches,
+        teamIds,
+        round1Byes,
+        numRounds
+      });
+      setByeTeamOptions(teamList);
+      setSelectedByeTeamId(null);
+      setShowByeModal(true);
+      return;
+    }
+
+    // No byes (even team count) — assign all teams randomly
     const shuffledIds = [...teamIds].sort(() => Math.random() - 0.5);
+    let teamIdx = 0;
+    for (let i = 0; i < round1Matches.length; i++) {
+      const match = round1Matches[i];
+      await supabase
+        .from('matches')
+        .update({ team1_id: shuffledIds[teamIdx], team2_id: shuffledIds[teamIdx + 1] })
+        .eq('id', match.id);
+      teamIdx += 2;
+    }
+
+    await propagateWinners(selectedTournament.id);
+    await fetchMatches(selectedTournament.id);
+  };
+
+  const handleByeConfirm = async () => {
+    if (!selectedByeTeamId || !pendingBracketData) return;
+
+    setShowByeModal(false);
+
+    const { insertedMatches, teamIds, round1Byes } = pendingBracketData;
+    const round1Matches = insertedMatches.filter(m => m.round === 1);
+
+    // Put the selected team last so it gets the bye slot (byes are the last matches in round 1)
+    const remainingIds = teamIds.filter(id => id !== selectedByeTeamId);
+    const shuffled = [...remainingIds].sort(() => Math.random() - 0.5);
+    const orderedIds = [...shuffled, selectedByeTeamId];
 
     let teamIdx = 0;
     for (let i = 0; i < round1Matches.length; i++) {
       const match = round1Matches[i];
       const isBye = i >= round1Matches.length - round1Byes;
 
-      if (isBye && teamIdx < shuffledIds.length) {
-        // Bye: team auto-advances
+      if (isBye && teamIdx < orderedIds.length) {
         await supabase
           .from('matches')
-          .update({ team1_id: shuffledIds[teamIdx], winner_id: shuffledIds[teamIdx] })
+          .update({ team1_id: orderedIds[teamIdx], winner_id: orderedIds[teamIdx] })
           .eq('id', match.id);
         teamIdx++;
-      } else if (teamIdx + 1 < shuffledIds.length) {
+      } else if (teamIdx + 1 < orderedIds.length) {
         await supabase
           .from('matches')
-          .update({ team1_id: shuffledIds[teamIdx], team2_id: shuffledIds[teamIdx + 1] })
+          .update({ team1_id: orderedIds[teamIdx], team2_id: orderedIds[teamIdx + 1] })
           .eq('id', match.id);
         teamIdx += 2;
       }
     }
 
-    // Propagate bye winners through subsequent rounds
     await propagateWinners(selectedTournament.id);
-
     await fetchMatches(selectedTournament.id);
+    setPendingBracketData(null);
+  };
+
+  const handleByeCancel = async () => {
+    if (!pendingBracketData) return;
+
+    setShowByeModal(false);
+
+    const { insertedMatches } = pendingBracketData;
+    const matchIds = insertedMatches.map(m => m.id);
+    await supabase.from('matches').delete().in('id', matchIds);
+
+    setPendingBracketData(null);
+    setSelectedByeTeamId(null);
   };
 
   const propagateWinners = async (tournamentId) => {
@@ -303,16 +363,16 @@ export default function Tournament() {
 
       if (!allMatches) return;
 
-      // Auto-complete bye matches
+      // Auto-complete structural bye matches only (is_bye = true)
       for (const match of allMatches) {
-        if (match.team1_id && !match.team2_id && !match.winner_id) {
+        if (match.is_bye && match.team1_id && !match.winner_id) {
           await supabase.from('matches').update({ winner_id: match.team1_id }).eq('id', match.id);
           match.winner_id = match.team1_id;
           madeChanges = true;
         }
       }
 
-      // Propagate winners to next matches
+      // Propagate winners to next matches, updating local array to avoid stale reads
       for (const match of allMatches) {
         if (match.winner_id && match.next_match_id) {
           const slotField = match.next_team_slot === 1 ? 'team1_id' : 'team2_id';
@@ -323,6 +383,8 @@ export default function Tournament() {
               .from('matches')
               .update({ [slotField]: match.winner_id })
               .eq('id', nextMatch.id);
+            // Update local copy so subsequent iterations see the change immediately
+            nextMatch[slotField] = match.winner_id;
             madeChanges = true;
           }
         }
@@ -557,57 +619,157 @@ export default function Tournament() {
             </div>
           )}
 
+          {/* Bye Selection Modal */}
+          {showByeModal && (
+            <div className="modal d-block" tabIndex="-1" style={{ background: "rgba(0,0,0,0.5)" }}>
+              <div className="modal-dialog">
+                <div className="modal-content">
+                  <div className="modal-header">
+                    <h5 className="modal-title">Select Team for Bye</h5>
+                  </div>
+                  <div className="modal-body">
+                    <p>There are an odd number of teams. Select <strong>1 team</strong> to receive a bye (auto-advance to the next round):</p>
+                    <div className="list-group">
+                      {byeTeamOptions.map((team) => (
+                        <button
+                          key={team.id}
+                          className={`list-group-item list-group-item-action ${selectedByeTeamId === team.id ? 'active' : ''}`}
+                          onClick={() => setSelectedByeTeamId(team.id)}
+                        >
+                          {team.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="modal-footer">
+                    <button className="btn btn-secondary" onClick={handleByeCancel}>
+                      Cancel
+                    </button>
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleByeConfirm}
+                      disabled={!selectedByeTeamId}
+                    >
+                      Confirm Bye
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Match display (shown before and after start) */}
           {hasBracket && (
             <div className="mt-3">
-              <h4>Matches</h4>
-              {(() => {
-                const rounds = [];
-                for (let r = 1; r <= maxRound; r++) {
-                  const roundMatches = matches
-                    .filter(m => m.round === r)
-                    .sort((a, b) => a.position - b.position);
-                  rounds.push({ round: r, matches: roundMatches });
-                }
+              <div className="d-flex align-items-center gap-3 mb-3">
+                <h4 className="mb-0">Matches</h4>
+                <div className="btn-group" role="group">
+                  <button
+                    className={`btn btn-sm ${viewMode === 'round' ? 'btn-primary' : 'btn-outline-primary'}`}
+                    onClick={() => setViewMode('round')}
+                  >
+                    Round View
+                  </button>
+                  <button
+                    className={`btn btn-sm ${viewMode === 'bracket' ? 'btn-primary' : 'btn-outline-primary'}`}
+                    onClick={() => setViewMode('bracket')}
+                  >
+                    Bracket View
+                  </button>
+                </div>
+              </div>
 
-                return rounds.map(({ round, matches: roundMatches }) => (
-                  <div key={round} className="mb-3">
-                    <h5 className="text-muted">{getRoundLabel(round, maxRound)}</h5>
-                    <ul className="list-group">
-                      {roundMatches.map((m) => (
-                        <li key={m.id} className="list-group-item d-flex justify-content-between align-items-center">
-                          <div>
-                            <strong>Match {m.position + 1}:</strong>{' '}
-                            {m.team1?.name || <span className="text-muted fst-italic">TBD</span>}
-                            {' '}<strong style={{ color: 'red' }}>vs</strong>{' '}
-                            {m.team2_id === null
-                              ? <span className="text-muted">BYE</span>
-                              : m.team2?.name || <span className="text-muted fst-italic">TBD</span>
-                            }
-                            <span className="ms-2 text-muted">
-                              ({m.team1_score} - {m.team2_score})
-                            </span>
-                          </div>
-                          <div className="d-flex gap-2 align-items-center">
-                            <button
-                              className="btn btn-primary btn-sm"
-                              onClick={() => playMatch(m)}
-                              disabled={!m.team1_id || !m.team2_id || !!m.winner_id}
-                            >
-                              Play
-                            </button>
-                            {m.winner_id && (
-                              <span className="badge bg-success">
-                                {m.winner_id === m.team1?.id ? m.team1.name : m.team2?.name} Wins!
+              {viewMode === 'round' && (
+                (() => {
+                  const rounds = [];
+                  for (let r = 1; r <= maxRound; r++) {
+                    const roundMatches = matches
+                      .filter(m => m.round === r)
+                      .sort((a, b) => a.position - b.position);
+                    rounds.push({ round: r, matches: roundMatches });
+                  }
+
+                  return rounds.map(({ round, matches: roundMatches }) => (
+                    <div key={round} className="mb-3">
+                      <h5 className="text-muted">{getRoundLabel(round, maxRound)}</h5>
+                      <ul className="list-group">
+                        {roundMatches.map((m) => (
+                          <li key={m.id} className="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                              <strong>Match {m.position + 1}:</strong>{' '}
+                              {m.team1?.name || <span className="text-muted fst-italic">TBD</span>}
+                              {' '}<strong style={{ color: 'red' }}>vs</strong>{' '}
+                              {m.team2_id === null
+                                ? <span className="text-muted">BYE</span>
+                                : m.team2?.name || <span className="text-muted fst-italic">TBD</span>
+                              }
+                              <span className="ms-2 text-muted">
+                                ({m.team1_score} - {m.team2_score})
                               </span>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
+                            </div>
+                            <div className="d-flex gap-2 align-items-center">
+                              <button
+                                className="btn btn-primary btn-sm"
+                                onClick={() => playMatch(m)}
+                                disabled={!m.team1_id || !m.team2_id || !!m.winner_id}
+                              >
+                                Play
+                              </button>
+                              {m.winner_id && (
+                                <span className="badge bg-success">
+                                  {m.winner_id === m.team1?.id ? m.team1.name : m.team2?.name} Wins!
+                                </span>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ));
+                })()
+              )}
+
+              {viewMode === 'bracket' && (
+                <div className="bracket-view">
+                  <div className="bracket-container d-flex justify-content-center" style={{ overflowX: 'auto' }}>
+                    {(() => {
+                      const rounds = [];
+                      for (let r = 1; r <= maxRound; r++) {
+                        const roundMatches = matches
+                          .filter(m => m.round === r)
+                          .sort((a, b) => a.position - b.position);
+                        rounds.push({ round: r, matches: roundMatches });
+                      }
+
+                      return rounds.map(({ round, matches: roundMatches }) => (
+                        <div key={round} className="bracket-round">
+                          <div className="bracket-round-label">{getRoundLabel(round, maxRound)}</div>
+                          {roundMatches.map((m) => (
+                            <div key={m.id} className={`bracket-match ${m.winner_id ? 'bracket-match-completed' : ''}`}>
+                              <div
+                                className={`bracket-team ${m.winner_id === m.team1?.id ? 'bracket-team-winner' : ''}`}
+                                onClick={() => m.team1_id && m.team2_id && !m.winner_id && playMatch(m)}
+                                style={{ cursor: m.team1_id && m.team2_id && !m.winner_id ? 'pointer' : 'default' }}
+                              >
+                                <span className="bracket-team-name">{m.team1?.name || 'TBD'}</span>
+                                <span className="bracket-team-score">{m.team1_score ?? ''}</span>
+                              </div>
+                              <div
+                                className={`bracket-team ${m.winner_id === m.team2?.id ? 'bracket-team-winner' : ''}`}
+                                onClick={() => m.team1_id && m.team2_id && !m.winner_id && playMatch(m)}
+                                style={{ cursor: m.team1_id && m.team2_id && !m.winner_id ? 'pointer' : 'default' }}
+                              >
+                                <span className="bracket-team-name">{m.team2?.name || (m.team2_id === null ? 'BYE' : 'TBD')}</span>
+                                <span className="bracket-team-score">{m.team2_score ?? ''}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ));
+                    })()}
                   </div>
-                ));
-              })()}
+                </div>
+              )}
             </div>
           )}
         </div>
