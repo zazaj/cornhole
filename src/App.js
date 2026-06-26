@@ -57,6 +57,55 @@ function Home({ navigate, ...props }) {
         team === 2 ? nextScore : otherScore,
         winner_id
       );
+
+      // Auto-advance winner to next match slot in the bracket
+      const nextMatchId = match?.next_match_id;
+      const nextTeamSlot = match?.next_team_slot;
+      if (nextMatchId && nextTeamSlot) {
+        const slotField = nextTeamSlot === 1 ? 'team1_id' : 'team2_id';
+        await supabase
+          .from('matches')
+          .update({ [slotField]: winner_id })
+          .eq('id', nextMatchId);
+
+        // Propagate through subsequent structural bye matches only.
+        // A structural bye (is_bye = true) has no team2 slot — it exists
+        // solely so the sole team auto-advances. This handles cases like
+        // 6 teams where round 2 has a structural bye that couldn't be
+        // resolved during bracket generation.
+        let cmId = nextMatchId;
+        while (true) {
+          const { data: cm } = await supabase
+            .from('matches')
+            .select('*')
+            .eq('id', cmId)
+            .single();
+
+          if (!cm) break;
+
+          // Only auto-complete if this is a structural bye, not a regular
+          // match waiting for an opponent to finish their round
+          if (!cm.is_bye) break;
+
+          // Auto-complete the bye match: the sole team advances
+          await supabase
+            .from('matches')
+            .update({ winner_id: cm.team1_id })
+            .eq('id', cm.id);
+
+          // Propagate this bye winner to the next match (if any)
+          if (!cm.next_match_id) break;
+
+          const nextSlotField = cm.next_team_slot === 1 ? 'team1_id' : 'team2_id';
+          await supabase
+            .from('matches')
+            .update({ [nextSlotField]: cm.team1_id })
+            .eq('id', cm.next_match_id);
+
+          // Continue to the next match, checking if THAT is also a bye
+          cmId = cm.next_match_id;
+        }
+      }
     }
 
     setWinnerId(winner_id || `${team}`);
