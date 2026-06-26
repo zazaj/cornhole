@@ -687,6 +687,13 @@ export default function Tournament() {
             <div className="mt-3">
               <div className="d-flex align-items-center gap-3 mb-3">
                 <h4 className="mb-0">Matches</h4>
+                <button
+                  className="btn btn-outline-info btn-sm"
+                  onClick={() => fetchMatches(selectedTournament.id)}
+                  title="Refresh scores from database"
+                >
+                  Fetch Scores
+                </button>
                 <div className="btn-group" role="group">
                   <button
                     className={`btn btn-sm ${viewMode === 'round' ? 'btn-primary' : 'btn-outline-primary'}`}
