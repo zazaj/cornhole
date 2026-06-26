@@ -5,6 +5,8 @@ CREATE TABLE tournaments (
   name TEXT NOT NULL,
   mode TEXT NOT NULL DEFAULT 'teams',
   started BOOLEAN NOT NULL DEFAULT false,
+  double_elimination BOOLEAN NOT NULL DEFAULT false,
+  has_grand_finale BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -34,9 +36,11 @@ CREATE TABLE matches (
   team1_score INTEGER NOT NULL DEFAULT 0,
   team2_score INTEGER NOT NULL DEFAULT 0,
   winner_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  loser_match_id INTEGER REFERENCES matches(id) ON DELETE SET NULL,
   next_match_id INTEGER REFERENCES matches(id) ON DELETE SET NULL,
   next_team_slot INTEGER CHECK (next_team_slot IN (1, 2)),
   is_bye BOOLEAN NOT NULL DEFAULT false,
+  bracket TEXT NOT NULL DEFAULT 'winners',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

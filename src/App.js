@@ -68,6 +68,30 @@ function Home({ navigate, ...props }) {
           .update({ [slotField]: winner_id })
           .eq('id', nextMatchId);
 
+        // Double elimination: place the loser into the loser_match_id bracket slot
+        const loserMatchId = match?.loser_match_id;
+        if (loserMatchId) {
+          const loserId = (winner_id === match?.team1?.id) ? match?.team2?.id : match?.team1?.id;
+          if (loserId) {
+            // Find which slot is available in the loser match
+            const { data: loserMatch } = await supabase
+              .from('matches')
+              .select('*')
+              .eq('id', loserMatchId)
+              .single();
+
+            if (loserMatch) {
+              const loserSlot = !loserMatch.team1_id ? 'team1_id' : (!loserMatch.team2_id ? 'team2_id' : null);
+              if (loserSlot) {
+                await supabase
+                  .from('matches')
+                  .update({ [loserSlot]: loserId })
+                  .eq('id', loserMatchId);
+              }
+            }
+          }
+        }
+
         // Propagate through subsequent structural bye matches only.
         // A structural bye (is_bye = true) has no team2 slot — it exists
         // solely so the sole team auto-advances. This handles cases like
